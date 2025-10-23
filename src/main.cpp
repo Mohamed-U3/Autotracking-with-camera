@@ -1,6 +1,11 @@
 #include <Arduino.h>
 #include <AccelStepper.h>
 #include <STM32FreeRTOS.h>
+#include <HardwareTimer.h>
+
+// Timer instance
+HardwareTimer *stepXTimer = new HardwareTimer(TIM2);
+HardwareTimer *stepYTimer = new HardwareTimer(TIM3);
 
 #define MOTOR_INTERFACE_TYPE 1 // 1 = driver (EN, STEP, DIR)
 
@@ -68,107 +73,120 @@ void SerialTxTask(void *pvParameters)
 
 void StepperX_Task(void *pvParameters)
 {
-  for (;;)
-  {
-    //************************************* Pressed State *****************************************//
-    while(digitalRead(BTN1_PIN) == LOW || digitalRead(BTN2_PIN) == LOW || digitalRead(BTN3_PIN) == LOW || digitalRead(BTN4_PIN) == LOW ||digitalRead(BTN5_PIN) == LOW)
-    {
-      //nothing
-      vTaskDelay(pdMS_TO_TICKS(100));
-      digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-      
-    }
     // PID parameters
-    // const long double Kp = 50.0;
-    // const long double Ki = 33.7;
-    // const long double Kd = 0.45;
-
-    const long double Kp = 50.0;
+    const long double Kp =  50.0;
     const long double Ki = 33.7;
     const long double Kd = 0.45;
-
-    long double pid_integral = 0;
-    long double pid_last_error = 0;
-    // const long double MAX_INTEGRAL = 100.0; // Tune this value               ///////////////////
-
-    // PID control loop
-    long double error = xValue; // xValue is the error from center
-    pid_integral += error;
-    // pid_integral = constrain(pid_integral, -MAX_INTEGRAL, MAX_INTEGRAL);  ///////////////////////// 
-    long double derivative = error - pid_last_error;
-    long double output = Kp * error + Ki * pid_integral + Kd * derivative;
-
-    // Limit output to reasonable speed range
-    output = constrain(output, -10000, 10000);
-
-    // Set stepper speed and direction
-    stepper1.setSpeed(output);
-    // stepper1.runSpeed();
-
-    pid_last_error = error;
-
-    vTaskDelay(pdMS_TO_TICKS(10)); // Run PID every 10ms
-  }
-}
-void StepperY_Task(void *pvParameters)
-{
-  for (;;)
-  {
-    //************************************* Pressed State *****************************************//
-    while(digitalRead(BTN1_PIN) == LOW || digitalRead(BTN2_PIN) == LOW || digitalRead(BTN3_PIN) == LOW || digitalRead(BTN4_PIN) == LOW ||digitalRead(BTN5_PIN) == LOW)
-    {
-      //nothing
-      vTaskDelay(pdMS_TO_TICKS(100));
-      digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-      
-    }
-    // PID parameters
-     const long double Kp = 30.0;
-     const long double Ki = 50.7;
-     const long double Kd = 0.756;
-
-
 
     long double pid_integral = 0;
     long double pid_last_error = 0;
     // const long double MAX_INTEGRAL = 100.0; // Tune this value          ////////////////////
     
     // PID control loop
-    long double error = yValue; // xValue is the error from center
-    pid_integral += error;
+    long double error = 0; // xValue is the error from center
+    
     // pid_integral = constrain(pid_integral, -MAX_INTEGRAL, MAX_INTEGRAL); /////////////////////
-    long double derivative = error - pid_last_error;
-    long double output = Kp * error + Ki * pid_integral + Kd * derivative;
-
-    // Limit output to reasonable speed range
-    output = constrain(output, -10000, 10000);
-
-    // Set stepper speed and direction
-    if (digitalRead(IR1_PIN) == HIGH && output < 0) output = 0;
-    if (digitalRead(IR2_PIN) == HIGH && output > 0) output = 0;
-    if(output > 9000)   output = 9000;
-    if(output < -9000)  output = -9000;
-    stepper2.setSpeed(-output);
-    // stepper2.runSpeed();
-
-    pid_last_error = error;
-
-    vTaskDelay(pdMS_TO_TICKS(10)); // Run PID every 10ms
-  }
-}
-
-void Stepper_Task(void *pvParameters)
-{
+    long double derivative = 0;
+    long double output =0;
+    uint32_t stepFreq =0;
   for (;;)
   {
-    stepper1.runSpeed();
-    // taskYIELD();
-    stepper2.runSpeed();
-    taskYIELD();
+    //************************************* Pressed State *****************************************//
+    while(digitalRead(BTN1_PIN) == LOW || digitalRead(BTN2_PIN) == LOW || digitalRead(BTN3_PIN) == LOW || digitalRead(BTN4_PIN) == LOW ||digitalRead(BTN5_PIN) == LOW)
+    {
+      //nothing
+      vTaskDelay(pdMS_TO_TICKS(100));
+      digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+      
+    }
+    // const long double MAX_INTEGRAL = 100.0; // Tune this value               ///////////////////
 
-    // vTaskDelay();
+    // PID control loop
+    error = xValue; // yValue is the error from center
+    derivative = error - pid_last_error; 
+    pid_integral += error;
+    output =  Kp * error + Ki * pid_integral + Kd * derivative;
+    pid_last_error = error;
+    output = constrain(output, -10000, 10000);
+      // NEW: Control hardware timer instead of stepper library
+    // Set direction based on sign
+    digitalWrite(DIR1_PIN, output > 0 ? HIGH : LOW);
+    
+    // Convert PID output to step frequency
+    stepFreq = abs((int32_t)output);
+    
+    if (stepFreq > 100) {  // Minimum speed threshold
+      stepXTimer->setOverflow(stepFreq, HERTZ_FORMAT);
+      stepXTimer->resume();  // Start/continue stepping
+    } else {
+      stepXTimer->pause();  // Stop if speed too low
+      digitalWrite(STEP1_PIN, LOW);
+
+    }
+    
+    vTaskDelay(pdMS_TO_TICKS(10)); // Keep your 10ms PID rate
+  }
+
+}
+
+/************************************************************************/
+
+void StepperY_Task(void *pvParameters)
+{
+    // PID parameters
+    const long double Kp = 30.0;
+    const long double Ki = 50.7;
+    const long double Kd = 0.756;
+
+    long double pid_integral = 0;
+    long double pid_last_error = 0;
+    // const long double MAX_INTEGRAL = 100.0; // Tune this value          ////////////////////
+    
+    // PID control loop
+    long double error = 0; // xValue is the error from center
+    
+    // pid_integral = constrain(pid_integral, -MAX_INTEGRAL, MAX_INTEGRAL); /////////////////////
+    long double derivative = 0;
+    long double output =0;
+    uint32_t stepFreq = 0;
+  for (;;)
+  {
+    //************************************* Pressed State *****************************************//
+    while(digitalRead(BTN1_PIN) == LOW || digitalRead(BTN2_PIN) == LOW || digitalRead(BTN3_PIN) == LOW || digitalRead(BTN4_PIN) == LOW ||digitalRead(BTN5_PIN) == LOW)
+    {
+      //nothing
+      vTaskDelay(pdMS_TO_TICKS(100));
+      digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+      
+    }
+    error = yValue; // yValue is the error from center
+    derivative = error - pid_last_error; 
+    pid_integral += error;
+    output =  Kp * error + Ki * pid_integral + Kd * derivative;
+    pid_last_error = error;
+    output = constrain(output, -10000, 10000);
+
+    // NEW: Control hardware timer instead of stepper library
+    // Set direction based on sign
+    digitalWrite(DIR2_PIN, output < 0 ? HIGH : LOW);
+    
+    // Convert PID output to step frequency
+    stepFreq = abs((int32_t)output);
+    
+    if (stepFreq > 50) {  // Minimum speed threshold
+      stepYTimer->setOverflow(stepFreq, HERTZ_FORMAT);
+      stepYTimer->resume();  // Start/continue stepping
+    } else {
+      stepYTimer->pause();  // Stop if speed too low
+      digitalWrite(STEP2_PIN, LOW);
+
+    }
+    
+    vTaskDelay(pdMS_TO_TICKS(10)); // Keep your 10ms PID rate
   }
 }
+
+
 
 //*******************************************************************************//
 //**************************** Buttons Task *************************************//
@@ -271,7 +289,23 @@ void ButtonsTask(void *pvParameters)
   }
 }
 
+// Timer ISR - keep it SHORT and FAST
+void stepXTimerISR() {
+  // Toggle step pin to generate pulse
+  digitalWrite(STEP1_PIN, !digitalRead(STEP1_PIN));
+  
+  // Alternative (faster): direct register access
+  // GPIOA->ODR ^= (1 << 0);  // Toggle PA0
+}
 
+// Timer ISR - keep it SHORT and FAST
+void stepYTimerISR() {
+  // Toggle step pin to generate pulse
+  digitalWrite(STEP2_PIN, !digitalRead(STEP1_PIN));
+  
+  // Alternative (faster): direct register access
+  // GPIOA->ODR ^= (1 << 0);  // Toggle PA0
+}
 
 //*****************************************************************************//
 //**************************** Setup Function **********************************//
@@ -282,6 +316,28 @@ void setup()
   Serial1.setTx(PB6);
   Serial1.setRx(PB7);
   Serial1.begin(9600);
+
+  /************************************* */
+    // Timer configuration with specific numbers
+  stepXTimer->setPrescaleFactor(8);           // 8MHz / 8 = 1MHz timer clock
+  stepXTimer->setOverflow(1000, HERTZ_FORMAT); // 1kHz step frequency (1000 steps/sec)
+
+  stepYTimer->setPrescaleFactor(8);           // 8MHz / 8 = 1MHz timer clock
+  stepYTimer->setOverflow(1000, HERTZ_FORMAT); // 1kHz step frequency (1000 steps/sec)
+  
+  // Set interrupt priority HIGHER than FreeRTOS (important!)
+  stepXTimer->setInterruptPriority(3, 0);     // Preempt=3, Sub=0 (higher than RTOS tick at 15)
+
+  stepYTimer->setInterruptPriority(3, 0);     // Preempt=3, Sub=0 (higher than RTOS tick at 15)
+  
+  // Attach ISR callback
+  stepXTimer->attachInterrupt(stepXTimerISR);
+  stepYTimer->attachInterrupt(stepYTimerISR);
+  
+  // Start timer
+  stepXTimer->resume();
+  stepYTimer->resume();
+
   //**********Pins Initialization**********//
   pinMode(LED_BUILTIN , OUTPUT  );
   pinMode(IR1_PIN     , INPUT   );
@@ -306,9 +362,8 @@ void setup()
   Serial1.println("Stepper motor control started");
   xTaskCreate(SerialRxTask, "SerialRxTask", 512, NULL, 1, NULL);
   // xTaskCreate(SerialTxTask, "SerialTxTask", 256, NULL, 3, NULL);
-  xTaskCreate(StepperX_Task, "StepperX_Task", 256, NULL, 1, NULL);
-  xTaskCreate(StepperY_Task, "StepperY_Task", 256, NULL, 1, NULL);
-  xTaskCreate(Stepper_Task, "Stepper_Task", 1024, NULL, 1, NULL);
+  xTaskCreate(StepperX_Task, "StepperX_Task", 512, NULL, 1, NULL);
+  xTaskCreate(StepperY_Task, "StepperY_Task", 512, NULL, 1, NULL);
   xTaskCreate(ButtonsTask, "Buttons", 128, NULL, 4, NULL);
   vTaskStartScheduler();
 }
@@ -350,3 +405,6 @@ bool parsePositionString(String str, long &x, long &y)
 
   return true;
 }
+
+
+
