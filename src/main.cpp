@@ -7,6 +7,19 @@
 HardwareTimer *stepXTimer = new HardwareTimer(TIM2);
 HardwareTimer *stepYTimer = new HardwareTimer(TIM3);
 
+#define DT 0.01
+//*********** Mechanism Physical Parameters ****************//
+
+/* 80 worm gear teath - 1:0.75 motor to worm ratio */
+#define ELEVATTION_STEP_PER_DEGREE  40    
+#define ELEVATION_DEGREE_PER_PIXEL  0.034    //   37/1080
+#define IMAGE_HEIGHT                1080
+
+#define IMAGE_WIDTH                 1920
+#define AZIMUTH_STEP_PER_DEGREE     55.5
+#define AZIMUTH_DEGREE_PER_PIXEL    0.031    
+
+
 #define MOTOR_INTERFACE_TYPE 1 // 1 = driver (EN, STEP, DIR)
 
 //**************** Motor 1 Pin Definitions *****************//
@@ -102,18 +115,18 @@ void StepperX_Task(void *pvParameters)
     // const long double MAX_INTEGRAL = 100.0; // Tune this value               ///////////////////
 
     // PID control loop
-    error = xValue; // yValue is the error from center
-    derivative = error - pid_last_error; 
-    pid_integral += error;
+    error = xValue*AZIMUTH_DEGREE_PER_PIXEL*AZIMUTH_STEP_PER_DEGREE; // yValue is the error from center
+    derivative = error - pid_last_error/DT; 
+    pid_integral += error*DT;
     output =  Kp * error + Ki * pid_integral + Kd * derivative;
     pid_last_error = error;
-    output = constrain(output, -10000, 10000);
+    output = constrain(output, -360, 360);
       // NEW: Control hardware timer instead of stepper library
     // Set direction based on sign
     digitalWrite(DIR1_PIN, output > 0 ? HIGH : LOW);
     
     // Convert PID output to step frequency
-    stepFreq = abs((int32_t)output);
+    stepFreq = abs((int32_t)output * AZIMUTH_STEP_PER_DEGREE);
     
     if (stepFreq > 100) {  // Minimum speed threshold
       stepXTimer->setOverflow(stepFreq, HERTZ_FORMAT);
@@ -159,27 +172,26 @@ void StepperY_Task(void *pvParameters)
       digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
       
     }
-    error = yValue; // yValue is the error from center
-    derivative = error - pid_last_error; 
-    pid_integral += error;
+    error = yValue*ELEVATION_DEGREE_PER_PIXEL*ELEVATTION_STEP_PER_DEGREE; // yValue is the error from center
+    derivative = error - pid_last_error/DT; 
+    pid_integral += error*DT;
     output =  Kp * error + Ki * pid_integral + Kd * derivative;
     pid_last_error = error;
-    output = constrain(output, -10000, 10000);
+   // output = constrain(output, -360, 360);
 
     // NEW: Control hardware timer instead of stepper library
     // Set direction based on sign
     digitalWrite(DIR2_PIN, output < 0 ? HIGH : LOW);
     
     // Convert PID output to step frequency
-    stepFreq = abs((int32_t)output);
-    
+    stepFreq = abs((int32_t)output*ELEVATTION_STEP_PER_DEGREE);
+    stepFreq = constrain(stepFreq, 50, 3000);
     if (stepFreq > 50) {  // Minimum speed threshold
       stepYTimer->setOverflow(stepFreq, HERTZ_FORMAT);
       stepYTimer->resume();  // Start/continue stepping
     } else {
       stepYTimer->pause();  // Stop if speed too low
       digitalWrite(STEP2_PIN, LOW);
-
     }
     
     vTaskDelay(pdMS_TO_TICKS(10)); // Keep your 10ms PID rate
@@ -353,18 +365,17 @@ void setup()
   digitalWrite(EN1_PIN, HIGH); // Enable motor driver
   digitalWrite(EN2_PIN, HIGH); // Enable motor driver
 
-  stepper1.setMaxSpeed(100 * 10000);
-  stepper1.setAcceleration(1 * 10000);
+ // stepper1.setMaxSpeed(100 * 10000);
+ // stepper1.setAcceleration(1 * 10000);
 
-  stepper2.setMaxSpeed(100 * 10000);
-  stepper2.setAcceleration(1 * 10000);
+  //stepper2.setMaxSpeed(100 * 10000);
+ // stepper2.setAcceleration(1 * 10000);
 
   Serial1.println("Stepper motor control started");
   xTaskCreate(SerialRxTask, "SerialRxTask", 512, NULL, 1, NULL);
-  // xTaskCreate(SerialTxTask, "SerialTxTask", 256, NULL, 3, NULL);
   xTaskCreate(StepperX_Task, "StepperX_Task", 512, NULL, 1, NULL);
   xTaskCreate(StepperY_Task, "StepperY_Task", 512, NULL, 1, NULL);
-  xTaskCreate(ButtonsTask, "Buttons", 128, NULL, 4, NULL);
+  xTaskCreate(ButtonsTask, "Buttons", 128, NULL, 1, NULL);
   vTaskStartScheduler();
 }
 
