@@ -48,8 +48,8 @@ AccelStepper stepper1(MOTOR_INTERFACE_TYPE, STEP1_PIN, DIR1_PIN);  //80000 means
 AccelStepper stepper2(MOTOR_INTERFACE_TYPE, STEP2_PIN, DIR2_PIN);
 
 //recieved positions values.
-long xValue = 0;
-long yValue = 0;
+signed long xValue = 0;
+signed long yValue = 0;
 long currPos1 = 0;
 long currPos2 = 0;
 
@@ -63,9 +63,18 @@ void SerialRxTask(void *pvParameters)
     {
       String receivedString = Serial1.readStringUntil('\n');
       receivedString.trim();
+     // xValue = (long)receivedString[0] ;
       bool validData = parsePositionString(receivedString, xValue, yValue);
+      
+      // int receivedString[2] = {0};
+      // for(int i=0; i<2; i++)
+      // {
+      //   receivedString[i] = Serial1.read();
+      // // Parse and set xValue, yValue, etc.
+      // }
+      //xValue = (long)receivedString[0] ;
+      //yValue = (long)receivedString[2] ;
       Serial1.read();
-      // Parse and set xValue, yValue, etc.
     }
     vTaskDelay(pdMS_TO_TICKS(33));
   }
@@ -77,7 +86,7 @@ void SerialTxTask(void *pvParameters)
   {
     Serial1.print("X Position: ");
     Serial1.print(xValue);
-    Serial1.print(" - Y Position: ");
+    Serial1.print(" ; Y Position: ");
     Serial1.println(yValue);
     vTaskDelay(pdMS_TO_TICKS(300));
   }
@@ -87,9 +96,10 @@ void SerialTxTask(void *pvParameters)
 void StepperX_Task(void *pvParameters)
 {
     // PID parameters
-    const long double Kp =  50.0;
-    const long double Ki = 33.7;
-    const long double Kd = 0.45;
+    //const long double Kp =  0.2;
+    const long double Kp =  0.75;
+    const long double Ki = 0.1;
+    const long double Kd = 0.1;
 
     long double pid_integral = 0;
     long double pid_last_error = 0;
@@ -105,7 +115,7 @@ void StepperX_Task(void *pvParameters)
   for (;;)
   {
     //************************************* Pressed State *****************************************//
-    while(digitalRead(BTN1_PIN) == LOW || digitalRead(BTN2_PIN) == LOW || digitalRead(BTN3_PIN) == LOW || digitalRead(BTN4_PIN) == LOW ||digitalRead(BTN5_PIN) == LOW)
+    while(digitalRead(BTN1_PIN) == LOW || digitalRead(BTN2_PIN) == LOW || digitalRead(BTN3_PIN) == LOW || digitalRead(BTN4_PIN) == LOW || digitalRead(BTN5_PIN) == LOW)
     {
       //nothing
       vTaskDelay(pdMS_TO_TICKS(100));
@@ -116,18 +126,19 @@ void StepperX_Task(void *pvParameters)
 
     // PID control loop
     error = xValue*AZIMUTH_DEGREE_PER_PIXEL*AZIMUTH_STEP_PER_DEGREE; // yValue is the error from center
-    derivative = error - pid_last_error/DT; 
+    derivative = (error - pid_last_error)/DT; 
     pid_integral += error*DT;
     output =  Kp * error + Ki * pid_integral + Kd * derivative;
     pid_last_error = error;
-    output = constrain(output, -360, 360);
-      // NEW: Control hardware timer instead of stepper library
+    //output = constrain(output, -360, 360);
+    // NEW: Control hardware timer instead of stepper library
     // Set direction based on sign
     digitalWrite(DIR1_PIN, output > 0 ? HIGH : LOW);
     
     // Convert PID output to step frequency
     stepFreq = abs((int32_t)output * AZIMUTH_STEP_PER_DEGREE);
-    
+    stepFreq = constrain(stepFreq, 50, 20000);
+    Serial1.println(stepFreq);
     if (stepFreq > 100) {  // Minimum speed threshold
       stepXTimer->setOverflow(stepFreq, HERTZ_FORMAT);
       stepXTimer->resume();  // Start/continue stepping
@@ -142,14 +153,95 @@ void StepperX_Task(void *pvParameters)
 
 }
 
+
+// void StepperX_Task(void *pvParameters)
+// {
+//     // BETTER PID parameters for stepper motors
+//     const long double Kp = 1.5;   // Reduced from 0.75
+//     const long double Ki = 0.01;  // Small integral for steady-state
+//     const long double Kd = 0.1;   // Reduced derivative gain
+    
+//     long double pid_integral = 0;
+//     long double pid_last_error = 0;
+//     const long double MAX_INTEGRAL = 50.0;  // Prevent windup
+    
+//     // ADD: Input filtering
+//     long double filtered_error = 0;
+//     const long double FILTER_ALPHA = 0.6;  // Low-pass filter
+    
+//     // ADD: Command rate limiter
+//     long double max_output_change = 10000.0;  // Max steps/sec change per iteration
+//     long double last_output = 0;
+//     long double output=0;
+//     long double raw_error = 0;
+//     long double output_change = 0;
+//     long double derivative =0;
+//     uint32_t stepFreq =0;
+    
+//     for (;;)
+//     {
+//         // ... existing button handling code ...
+//         //     //************************************* Pressed State *****************************************//
+//     while(digitalRead(BTN1_PIN) == LOW || digitalRead(BTN2_PIN) == LOW || digitalRead(BTN3_PIN) == LOW || digitalRead(BTN4_PIN) == LOW || digitalRead(BTN5_PIN) == LOW)
+//     {
+//       //nothing
+//       vTaskDelay(pdMS_TO_TICKS(100));
+//       digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+      
+//     }
+//         // Raw error from Python (in steps)
+//         raw_error = xValue * AZIMUTH_DEGREE_PER_PIXEL * AZIMUTH_STEP_PER_DEGREE;
+        
+//         // LOW-PASS FILTER: Smooth noisy input
+//         filtered_error = FILTER_ALPHA * raw_error + (1 - FILTER_ALPHA) * filtered_error;
+        
+//         // PID calculation with filtered error
+//         derivative = (filtered_error - pid_last_error) / DT;
+//         pid_integral += filtered_error * DT;
+        
+//         // Anti-windup: Clamp integral
+//         pid_integral = constrain(pid_integral, -MAX_INTEGRAL, MAX_INTEGRAL);
+        
+//         output = Kp * filtered_error + Ki * pid_integral + Kd * derivative;
+        
+//         // RATE LIMITER: Prevent sudden speed changes
+//         output_change = output - last_output;
+//         output_change = constrain(output_change, -max_output_change, max_output_change);
+//         output = last_output + output_change;
+        
+//         pid_last_error = filtered_error;
+//         last_output = output;
+        
+//         // Set direction
+//         digitalWrite(DIR1_PIN, output > 0 ? HIGH : LOW);
+        
+//         // Convert to frequency with better scaling
+//         stepFreq = abs((int32_t)output*AZIMUTH_STEP_PER_DEGREE);
+//         stepFreq = constrain(stepFreq, 100, 20000);  // Wider range, safer max
+//         Serial1.println(stepFreq);
+//         // ADD: Minimum threshold to prevent micro-movements
+//         if (stepFreq > 100) {  // Only move if significant error
+//             stepXTimer->setOverflow(stepFreq, HERTZ_FORMAT);
+//             stepXTimer->resume();
+//         } else {
+//             stepXTimer->pause();
+//             digitalWrite(STEP1_PIN, LOW);
+//         }
+        
+//         vTaskDelay(pdMS_TO_TICKS(10));
+//     }
+// }
 /************************************************************************/
 
 void StepperY_Task(void *pvParameters)
 {
     // PID parameters
-    const long double Kp = 30.0;
-    const long double Ki = 50.7;
-    const long double Kd = 0.756;
+    // const long double Kp = 30.0;
+    // const long double Ki = 50.7;
+    // const long double Kd = 0.756;
+    const long double Kp = 0.75;
+    const long double Ki =0;
+    const long double Kd =0.1;
 
     long double pid_integral = 0;
     long double pid_last_error = 0;
@@ -173,7 +265,7 @@ void StepperY_Task(void *pvParameters)
       
     }
     error = yValue*ELEVATION_DEGREE_PER_PIXEL*ELEVATTION_STEP_PER_DEGREE; // yValue is the error from center
-    derivative = error - pid_last_error/DT; 
+    derivative = (error - pid_last_error)/DT; 
     pid_integral += error*DT;
     output =  Kp * error + Ki * pid_integral + Kd * derivative;
     pid_last_error = error;
@@ -181,11 +273,12 @@ void StepperY_Task(void *pvParameters)
 
     // NEW: Control hardware timer instead of stepper library
     // Set direction based on sign
-    digitalWrite(DIR2_PIN, output < 0 ? HIGH : LOW);
+    digitalWrite(DIR2_PIN, output > 0 ? HIGH : LOW);
     
     // Convert PID output to step frequency
     stepFreq = abs((int32_t)output*ELEVATTION_STEP_PER_DEGREE);
-    stepFreq = constrain(stepFreq, 50, 3000);
+    stepFreq = constrain(stepFreq, 50, 20000);
+    Serial1.println(stepFreq);
     if (stepFreq > 50) {  // Minimum speed threshold
       stepYTimer->setOverflow(stepFreq, HERTZ_FORMAT);
       stepYTimer->resume();  // Start/continue stepping
@@ -215,14 +308,18 @@ void ButtonsTask(void *pvParameters)
     {
       if(wasReleased1)
       {
-        stepper1.stop();
-        stepper1.setCurrentPosition(0);
+        // stepper1.stop();
+        // stepper1.setCurrentPosition(0);
+      stepXTimer->pause();  // Stop if speed too low
+      digitalWrite(STEP1_PIN, LOW);
         wasReleased1 = false;
       }
       if(wasReleased2)
       {
-        stepper2.stop();
-        stepper2.setCurrentPosition(0);
+        // stepper2.stop();
+        // stepper2.setCurrentPosition(0);
+      stepYTimer->pause();  // Stop if speed too low
+      digitalWrite(STEP2_PIN, LOW);
         wasReleased2 = false;
       }
       vTaskDelay(pdMS_TO_TICKS(10));
@@ -241,8 +338,11 @@ void ButtonsTask(void *pvParameters)
           wasRight = true;
         }
         wasReleased1 = true;
-        stepper1.moveTo(1000000); // Move continuously
-        stepper1.run(); 
+        // stepper1.moveTo(1000000); // Move continuously
+        // stepper1.run(); 
+         digitalWrite(DIR1_PIN,1);
+      stepXTimer->setOverflow(15000, HERTZ_FORMAT);
+      stepXTimer->resume();  // Start/continue stepping
       }
       // currentPos1 = stepper1.currentPosition();
     }
@@ -256,15 +356,18 @@ void ButtonsTask(void *pvParameters)
           wasRight = false;
         }
         wasReleased1 = true;
-        stepper1.moveTo(-1000000); // Move continuously
-        stepper1.run();
+      digitalWrite(DIR1_PIN,0);
+      stepXTimer->setOverflow(15000, HERTZ_FORMAT);
+      stepXTimer->resume();
       }
       // currentPos1 = stepper1.currentPosition();
     }
     else
     {
-      stepper1.stop();
-      stepper1.setCurrentPosition(0);
+      // stepper1.stop();
+      // stepper1.setCurrentPosition(0);
+      stepXTimer->pause();  // Stop if speed too low
+      digitalWrite(STEP1_PIN, LOW);
       xValue = 0;
     }
   
@@ -277,8 +380,11 @@ void ButtonsTask(void *pvParameters)
       while (digitalRead(IR2_PIN) == LOW && digitalRead(BTN1_PIN) == LOW)
       {
         wasReleased2 = true;
-        stepper2.moveTo(-1000000); // Move continuously
-        stepper2.run();
+        // stepper2.moveTo(-1000000); // Move continuously
+        // stepper2.run();
+      digitalWrite(DIR2_PIN,0);
+      stepYTimer->setOverflow(15000, HERTZ_FORMAT);
+      stepYTimer->resume();
       }
     }
     else if (digitalRead(BTN2_PIN) == LOW)
@@ -287,14 +393,19 @@ void ButtonsTask(void *pvParameters)
       while (digitalRead(IR1_PIN) == LOW && digitalRead(BTN2_PIN) == LOW)
       {
         wasReleased2 = true;
-        stepper2.moveTo(1000000); // Move continuously
-        stepper2.run();
+        // stepper2.moveTo(1000000); // Move continuously
+        // stepper2.run();
+      digitalWrite(DIR2_PIN,1);
+      stepYTimer->setOverflow(15000, HERTZ_FORMAT);
+      stepYTimer->resume();
       }
     }
     else
     {
-      stepper2.stop();
-      stepper2.setCurrentPosition(0);
+      // stepper2.stop();
+      // stepper2.setCurrentPosition(0);
+      stepYTimer->pause();  // Stop if speed too low
+      digitalWrite(STEP2_PIN, LOW);
       yValue = 0;
     }
     vTaskDelay(pdMS_TO_TICKS(10));
@@ -313,7 +424,7 @@ void stepXTimerISR() {
 // Timer ISR - keep it SHORT and FAST
 void stepYTimerISR() {
   // Toggle step pin to generate pulse
-  digitalWrite(STEP2_PIN, !digitalRead(STEP1_PIN));
+  digitalWrite(STEP2_PIN, !digitalRead(STEP2_PIN));
   
   // Alternative (faster): direct register access
   // GPIOA->ODR ^= (1 << 0);  // Toggle PA0
@@ -375,7 +486,7 @@ void setup()
   xTaskCreate(SerialRxTask, "SerialRxTask", 512, NULL, 1, NULL);
   xTaskCreate(StepperX_Task, "StepperX_Task", 512, NULL, 1, NULL);
   xTaskCreate(StepperY_Task, "StepperY_Task", 512, NULL, 1, NULL);
-  xTaskCreate(ButtonsTask, "Buttons", 128, NULL, 1, NULL);
+  xTaskCreate(ButtonsTask, "Buttons", 128, NULL, 4, NULL);
   vTaskStartScheduler();
 }
 
@@ -390,12 +501,16 @@ void loop()
 //*****************************************************************************//
 //********************* Function to parse position string ********************//
 //*****************************************************************************//
+
 bool parsePositionString(String str, long &x, long &y)
 {
-  // Find the position of "X:" and "Y:"
-  long xIndex = str.indexOf("X:");
-  long yIndex = str.indexOf("Y:");
-  int dashIndex = str.indexOf("-");
+  // // Find the position of "X:" and "Y:"
+  // int xIndex = str[0];
+  // int yIndex = str[7];
+  // int dashIndex = str[5];
+  int xIndex = str.indexOf("X:");
+  int yIndex = str.indexOf("Y:");
+  int dashIndex = str.indexOf('-');
 
   // Check if all required markers are present
   if (xIndex == -1 || yIndex == -1 || dashIndex == -1) {
@@ -408,14 +523,34 @@ bool parsePositionString(String str, long &x, long &y)
 
   // Extract Y value substring (after "Y:")
   String yString = str.substring(yIndex + 2);
+  //int yString = str[10];
   yString.trim();
 
   // Convert strings to integers
   x = xString.toInt();
+  // y = ((int)str[10]);
   y = yString.toInt();
+
 
   return true;
 }
 
 
+/*
+bool parsePositionString(String str, long &x, long &y) {
 
+int spaceIndex = str.indexOf(' ');
+String first = str.substring(0, spaceIndex);
+//String second = str.substring(spaceIndex + 1);
+
+first.trim();
+//second.trim();
+
+x = first.toInt();
+y = (int)str[2];
+
+// Serial.print("X = "); Serial.println(x);
+// Serial.print("Y = "); Serial.println(y);
+return true;
+}
+*/
