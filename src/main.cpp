@@ -97,8 +97,12 @@ void StepperX_Task(void *pvParameters)
 {
     // PID parameters
     //const long double Kp =  0.2;
-    const long double Kp =  0.75;
-    const long double Ki = 0.1;
+    // const long double Kp =  1.6;
+    // const long double Ki = 0.08;
+    // const long double Kd = 0.04;
+
+    const long double Kp =  1;
+    const long double Ki = 0.01;
     const long double Kd = 0.1;
 
     long double pid_integral = 0;
@@ -123,7 +127,13 @@ void StepperX_Task(void *pvParameters)
       
     }
     // const long double MAX_INTEGRAL = 100.0; // Tune this value               ///////////////////
-
+    if(xValue == 0)
+    {
+      stepXTimer->pause();  // Stop if speed too low
+      digitalWrite(STEP1_PIN, LOW);
+    }
+    else
+    {
     // PID control loop
     error = xValue*AZIMUTH_DEGREE_PER_PIXEL*AZIMUTH_STEP_PER_DEGREE; // yValue is the error from center
     derivative = (error - pid_last_error)/DT; 
@@ -136,9 +146,12 @@ void StepperX_Task(void *pvParameters)
     digitalWrite(DIR1_PIN, output > 0 ? HIGH : LOW);
     
     // Convert PID output to step frequency
-    stepFreq = abs((int32_t)output * AZIMUTH_STEP_PER_DEGREE);
-    stepFreq = constrain(stepFreq, 50, 20000);
-    Serial1.println(stepFreq);
+    stepFreq = fabs(output * AZIMUTH_STEP_PER_DEGREE);
+        stepFreq = (int32_t)stepFreq;
+
+    stepFreq = constrain(stepFreq, 100, 20000);
+    //Serial1.print("X=");
+    //Serial1.println(stepFreq);
     if (stepFreq > 100) {  // Minimum speed threshold
       stepXTimer->setOverflow(stepFreq, HERTZ_FORMAT);
       stepXTimer->resume();  // Start/continue stepping
@@ -149,6 +162,7 @@ void StepperX_Task(void *pvParameters)
     }
     
     vTaskDelay(pdMS_TO_TICKS(10)); // Keep your 10ms PID rate
+  }
   }
 
 }
@@ -236,12 +250,13 @@ void StepperX_Task(void *pvParameters)
 void StepperY_Task(void *pvParameters)
 {
     // PID parameters
-    // const long double Kp = 30.0;
-    // const long double Ki = 50.7;
-    // const long double Kd = 0.756;
-    const long double Kp = 0.75;
-    const long double Ki =0;
-    const long double Kd =0.1;
+    // const long double Kp = 1.6;     //0.75
+    // const long double Ki =0;           //0
+    // const long double Kd =0.1;         //0.1
+
+    const long double Kp = 2;     //0.75
+    const long double Ki =0;           //0
+    const long double Kd =0.0;         //0.1
 
     long double pid_integral = 0;
     long double pid_last_error = 0;
@@ -278,7 +293,7 @@ void StepperY_Task(void *pvParameters)
     // Convert PID output to step frequency
     stepFreq = abs((int32_t)output*ELEVATTION_STEP_PER_DEGREE);
     stepFreq = constrain(stepFreq, 50, 20000);
-    Serial1.println(stepFreq);
+   // Serial1.println(stepFreq);
     if (stepFreq > 50) {  // Minimum speed threshold
       stepYTimer->setOverflow(stepFreq, HERTZ_FORMAT);
       stepYTimer->resume();  // Start/continue stepping
