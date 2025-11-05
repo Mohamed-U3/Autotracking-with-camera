@@ -165,7 +165,6 @@ void Stepper_Task(void *pvParameters)
     // taskYIELD();
     stepper2.runSpeed();
     taskYIELD();
-
     // vTaskDelay();
   }
 }
