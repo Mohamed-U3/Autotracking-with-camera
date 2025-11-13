@@ -13,18 +13,25 @@ HardwareTimer *stepYTimer = new HardwareTimer(TIM3);
 /* 80 worm gear teath - 1:0.75 motor to worm ratio */
 #define ELEVATTION_STEP_PER_DEGREE  40    
 #define ELEVATION_DEGREE_PER_PIXEL  0.034    //   37/1080
-#define IMAGE_HEIGHT                1080
+#define DAY_IMAGE_HEIGHT                1080
 
-#define IMAGE_WIDTH                 1920
+#define DAY_IMAGE_WIDTH                 1920
 #define AZIMUTH_STEP_PER_DEGREE     55.5
 #define AZIMUTH_DEGREE_PER_PIXEL    0.031    // FOV / img_width
 
-float azimuth_degree_per_pixel = 0.0;
-float elevation_degree_per_pixel = 0.0;
+/********************************** */
+float day_azimuth_degree_per_pixel = 0.0;
+float day_elevation_degree_per_pixel = 0.0;
 
-float azimuth_FOV = 0.0;
-float elevation_FOV = 0.0;
+float day_azimuth_FOV = 0.0;
+float day_elevation_FOV = 0.0;
+/********************************** */
+float thermal_azimuth_degree_per_pixel = 0.0;
+float thermal_elevation_degree_per_pixel = 0.0;
 
+float thermal_azimuth_FOV = 0.0;
+float thermal_elevation_FOV = 0.0;
+/********************************** */
 #define MOTOR_INTERFACE_TYPE 1 // 1 = driver (EN, STEP, DIR)
 
 //**************** Motor 1 Pin Definitions *****************//
@@ -53,15 +60,15 @@ AccelStepper stepper1(MOTOR_INTERFACE_TYPE, STEP1_PIN, DIR1_PIN);  //80000 means
 AccelStepper stepper2(MOTOR_INTERFACE_TYPE, STEP2_PIN, DIR2_PIN);
 
 //recieved positions values.
-signed long xValue = 0;
-signed long yValue = 0;
-signed long zValue = 0;
-long currPos1 = 0;
-long currPos2 = 0;
-int Xmax_speed =0 ;
-int Ymax_speed =0 ;
+signed long xValue = 0;                                  // Error distance in x-direction in pixels recieved from the high level
+signed long yValue = 0;                                  // Error distance in y-direction in pixels recieved from the high level
+signed long zValue = 0;                                  // Zoom level recieved from the high level
+int  cam =0;                                             // Camera used (0 = Day Cam in use , 1 = Thermal Cam in use)
 
-bool parsePositionString(String str, long &x, long &y, long &z);
+int  Xmax_speed =0 ;                                     // maximum speed limit per axis based on level of zoom recieved (speed decreases on zooming in & vice versa)
+int  Ymax_speed =0 ;
+
+bool parsePositionString(String str, long &x, long &y, long &z,int &camera);
 
 void SerialRxTask(void *pvParameters)
 {
@@ -69,19 +76,48 @@ void SerialRxTask(void *pvParameters)
   {
     if (Serial1.available() > 0)
     {
+      /*
+      Recieve format is:
+      "X: x - Y: y - Z: z"
+      new format after adding thermal cam.:
+      "X: x - Y: y - Z: z - C: c"          (C = used camera 1 or 0)
+      */
+
+      /* start recieving until find the end of string */
       String receivedString = Serial1.readStringUntil('\n');
       receivedString.trim();
-     // xValue = (long)receivedString[0] ;
-      bool validData = parsePositionString(receivedString, xValue, yValue, zValue);
+      
+     /* read out the numeric content from the recieved string  */
+      bool validData = parsePositionString(receivedString, xValue, yValue, zValue,cam);
       
       Serial1.read();
 
-      azimuth_FOV = 61.9 - ((zValue/7.0f) * (6.0f/7.0f) * 60);
-      azimuth_degree_per_pixel = azimuth_FOV / IMAGE_WIDTH;
+      /* D A Y - C A M E R A */
+      if(cam == 0)
+      {
 
-      elevation_FOV = 37.2 - ((zValue/7.0f) * (36.1f/70.0f) * 36.1);
-      elevation_degree_per_pixel = elevation_FOV / IMAGE_HEIGHT;
+/* FUNCTIONS TO CALCULATE RE-SCLAE AND MAP RECIEVED ZOOM LEVEL TO UPDATE THE FIELD OF VIEW*/
 
+      /* Day camera has FOV range from 61.9 to 1.9 degrees in horizontal */  
+        day_azimuth_FOV = 61.9 - ((zValue/7.0f) * (60.0f/7.0f) * 60);
+        day_azimuth_degree_per_pixel = day_azimuth_FOV / DAY_IMAGE_WIDTH;
+
+      /* Day camera has FOV range from 37.2 to 1.1 degrees in vertical */ 
+        day_elevation_FOV = 37.2 - ((zValue/7.0f) * (36.1f/70.0f) * 36.1);
+        day_elevation_degree_per_pixel = day_elevation_FOV / DAY_IMAGE_HEIGHT;
+      }
+      else
+      {
+      /* Thermal camera has FOV range from 14.6 to 2.4 degrees in horizontal */ 
+        thermal_azimuth_FOV = 14.6 - ((zValue/7.0f) * (12.2f/7.0f) * 12.2);
+        thermal_azimuth_degree_per_pixel = thermal_azimuth_FOV / DAY_IMAGE_WIDTH;
+
+        /* Thermal camera has FOV range from 11.7 to 2 degrees in vertical */ 
+        thermal_elevation_FOV = 11.7 - ((zValue/7.0f) * (9.7f/70.0f) * 9.7);
+        thermal_elevation_degree_per_pixel = thermal_elevation_FOV / DAY_IMAGE_HEIGHT;
+      }
+
+      /* Remap the maximum speed in both axes depending on the current zoom level */
       Xmax_speed = map(zValue, 0, 7, 20000, 300);
       Ymax_speed = map(zValue, 0, 7, 20000, 200);
 
@@ -111,9 +147,9 @@ void StepperX_Task(void *pvParameters)
     // const long double Ki = 0.08;
     // const long double Kd = 0.04;
 
-    const long double Kp =  0;     //0.75
-    const long double Ki = 0.0;      //0.02
-    const long double Kd = 0.0;       //0.1
+    long double Kp =  0;     //0.75
+    long double Ki = 0.0;      //0.02
+    long double Kd = 0.0;       //0.1
 
     long double pid_integral = 0;
     long double pid_last_error = 0;
@@ -144,8 +180,14 @@ void StepperX_Task(void *pvParameters)
     }
     else
     {
-    // PID control loop
-    error = xValue*azimuth_degree_per_pixel*AZIMUTH_STEP_PER_DEGREE; // xValue is the error from center
+      if(cam ==0)
+      {
+        Kp=1.6;
+        Ki=0.08;
+        Kd=0.04;
+
+    // Day PID control loop
+    error = xValue*day_azimuth_degree_per_pixel*AZIMUTH_STEP_PER_DEGREE; // xValue is the error from center
     derivative = (error - pid_last_error)/DT; 
     pid_integral += error*DT;
     output =  Kp * error + Ki * pid_integral + Kd * derivative;
@@ -153,11 +195,28 @@ void StepperX_Task(void *pvParameters)
     //output = constrain(output, -360, 360);
     // NEW: Control hardware timer instead of stepper library
     // Set direction based on sign
+      }
+      else
+      {
+        Kp=0;
+        Ki=0;
+        Kd=0;
+
+    // Thermal PID control loop
+    error = xValue*thermal_azimuth_degree_per_pixel*AZIMUTH_STEP_PER_DEGREE; // xValue is the error from center
+    derivative = (error - pid_last_error)/DT; 
+    pid_integral += error*DT;
+    output =  Kp * error + Ki * pid_integral + Kd * derivative;
+    pid_last_error = error;
+    //output = constrain(output, -360, 360);
+    // NEW: Control hardware timer instead of stepper library
+  
+      }
+        // Set direction based on sign
     digitalWrite(DIR1_PIN, output > 0 ? HIGH : LOW);
     
     // Convert PID output to step frequency
     stepFreq = fabs(output * AZIMUTH_STEP_PER_DEGREE);
-    
     stepFreq = constrain(stepFreq, 0, Xmax_speed);
     stepFreq = (int32_t)stepFreq;
     //Serial1.print("X=");
@@ -186,9 +245,9 @@ void StepperY_Task(void *pvParameters)
     // const long double Ki =0;           //0
     // const long double Kd =0.1;         //0.1
 
-    const long double Kp = 0.75;                //1;     //0.75
-    const long double Ki =0.1;           //0.01
-    const long double Kd =0.1;         //0.1
+    long double Kp = 0;                //1;     //0.75
+    long double Ki =0;           //0.01
+    long double Kd =0;         //0.1
 
     long double pid_integral = 0;
     long double pid_last_error = 0;
@@ -217,11 +276,31 @@ void StepperY_Task(void *pvParameters)
       digitalWrite(STEP2_PIN, LOW);
     }
     else{
-    error = yValue*elevation_degree_per_pixel*ELEVATTION_STEP_PER_DEGREE; // yValue is the error from center
+
+      if(cam==0)
+      {
+        Kp=0.75;
+        Kd=0.1;
+        Ki=0.1;
+
+    error = yValue*day_elevation_degree_per_pixel*ELEVATTION_STEP_PER_DEGREE; // yValue is the error from center
     derivative = (error - pid_last_error)/DT; 
     pid_integral += error*DT;
     output =  Kp * error + Ki * pid_integral + Kd * derivative;
     pid_last_error = error;
+      }
+      else
+      {
+        Kp=0;
+        Kd=0;
+        Ki=0;
+
+    error = yValue*thermal_elevation_degree_per_pixel*ELEVATTION_STEP_PER_DEGREE; // yValue is the error from center
+    derivative = (error - pid_last_error)/DT; 
+    pid_integral += error*DT;
+    output =  Kp * error + Ki * pid_integral + Kd * derivative;
+    pid_last_error = error;
+      }
    // output = constrain(output, -360, 360);
 
     // NEW: Control hardware timer instead of stepper library
@@ -431,11 +510,11 @@ void setup()
   digitalWrite(EN1_PIN, HIGH); // Enable motor driver
   digitalWrite(EN2_PIN, HIGH); // Enable motor driver
 
- // stepper1.setMaxSpeed(100 * 10000);
- // stepper1.setAcceleration(1 * 10000);
+  stepper1.setMaxSpeed(100 * 10000);
+  stepper1.setAcceleration(1 * 10000);
 
-  //stepper2.setMaxSpeed(100 * 10000);
- // stepper2.setAcceleration(1 * 10000);
+  stepper2.setMaxSpeed(100 * 10000);
+  stepper2.setAcceleration(1 * 10000);
 
   Serial1.println("Stepper motor control started");
   xTaskCreate(SerialRxTask, "SerialRxTask", 512, NULL, 1, NULL);
@@ -457,48 +536,13 @@ void loop()
 //********************* Function to parse position string ********************//
 //*****************************************************************************//
 
-// bool parsePositionString(String str, long &x, long &y)
-// {
-//   // // Find the position of "X:" and "Y:"
-//   // int xIndex = str[0];
-//   // int yIndex = str[7];
-//   // int dashIndex = str[5];
-//   int xIndex = str.indexOf("X:");
-//   int yIndex = str.indexOf("Y:");
-//   int zIndex = str.indexOf("Z:");
-//   int dash1Index = str.indexOf('-');
-
-//   // Check if all required markers are present
-//   if (xIndex == -1 || yIndex == -1 || dash1Index == -1) {
-//     return false;
-//   }
-
-//   // Extract X value substring (between "X:" and "-")
-//   String xString = str.substring(xIndex + 2);
-//   xString.trim();
-
-//   // Extract Y value substring (after "Y:")
-//   String yString = str.substring(yIndex + 2);
-//   //int yString = str[10];
-//   yString.trim();
-
-//   // Convert strings to integers
-//   x = xString.toInt();
-//   // y = ((int)str[10]);
-//   y = yString.toInt();
-
-
-//   return true;
-// }
-
-
-bool parsePositionString(String str, long &x, long &y, long &z)
+bool parsePositionString(String str, long &x, long &y, long &z, int &camera)
 {
   // Find markers for X, Y, and Z
   int xIndex = str.indexOf("X:");
   int yIndex = str.indexOf("Y:");
   int zIndex = str.indexOf("Z:");
-
+  int cam    = str.indexOf("C:");
   // Validate all markers exist
   if (xIndex == -1 || yIndex == -1 || zIndex == -1) {
     return false;
@@ -507,8 +551,8 @@ bool parsePositionString(String str, long &x, long &y, long &z)
   // Extract substrings between markers
   String xString = str.substring(xIndex + 2, yIndex);  // from after "X:" to before "Y:"
   String yString = str.substring(yIndex + 2, zIndex);  // from after "Y:" to before "Z:"
-  String zString = str.substring(zIndex + 2);          // from after "Z:" to end
-
+  String zString = str.substring(zIndex + 2, cam);     // from after "Z:" to before "C:"
+  String camString     = str.substring(zIndex + 2);              // from after "C:" to end
   // Clean spaces
   xString.trim();
   yString.trim();
@@ -518,27 +562,6 @@ bool parsePositionString(String str, long &x, long &y, long &z)
   x = xString.toInt();
   y = yString.toInt();
   z = zString.toInt();
-
+  camera = camString.toInt();
   return true;
 }
-
-
-
-/*
-bool parsePositionString(String str, long &x, long &y) {
-
-int spaceIndex = str.indexOf(' ');
-String first = str.substring(0, spaceIndex);
-//String second = str.substring(spaceIndex + 1);
-
-first.trim();
-//second.trim();
-
-x = first.toInt();
-y = (int)str[2];
-
-// Serial.print("X = "); Serial.println(x);
-// Serial.print("Y = "); Serial.println(y);
-return true;
-}
-*/
