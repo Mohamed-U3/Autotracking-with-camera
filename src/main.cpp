@@ -72,6 +72,7 @@ bool parsePositionString(String str, long &x, long &y, long &z,int &camera);
 
 void SerialRxTask(void *pvParameters)
 {
+  TickType_t xLastWakeTime = xTaskGetTickCount();
   for (;;)
   {
     if (Serial1.available() > 0)
@@ -122,7 +123,8 @@ void SerialRxTask(void *pvParameters)
       Ymax_speed = map(zValue, 0, 7, 20000, 200);
 
     }
-    vTaskDelay(pdMS_TO_TICKS(33));
+    //vTaskDelay(pdMS_TO_TICKS(33));
+    vTaskDelayUntil( &xLastWakeTime, pdMS_TO_TICKS( 10 ) );
   }
 }
 
@@ -141,6 +143,7 @@ void SerialTxTask(void *pvParameters)
 
 void StepperX_Task(void *pvParameters)
 {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
     // PID parameters
     //const long double Kp =  0.2;
     // const long double Kp =  1.6;
@@ -230,7 +233,8 @@ void StepperX_Task(void *pvParameters)
 
     }
     
-    vTaskDelay(pdMS_TO_TICKS(10)); // Keep your 10ms PID rate
+    //vTaskDelay(pdMS_TO_TICKS(10)); // Keep your 10ms PID rate
+    vTaskDelayUntil( &xLastWakeTime, pdMS_TO_TICKS( 10 ) );
   }
   }
 
@@ -240,6 +244,7 @@ void StepperX_Task(void *pvParameters)
 
 void StepperY_Task(void *pvParameters)
 {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
     // PID parameters
     // const long double Kp = 1.6;     //0.75
     // const long double Ki =0;           //0
@@ -320,7 +325,8 @@ void StepperY_Task(void *pvParameters)
       digitalWrite(STEP2_PIN, LOW);
     }
     
-    vTaskDelay(pdMS_TO_TICKS(10)); // Keep your 10ms PID rate
+    //vTaskDelay(pdMS_TO_TICKS(10)); // Keep your 10ms PID rate
+    vTaskDelayUntil( &xLastWakeTime, pdMS_TO_TICKS( 10 ) );
   }
 }
 }
