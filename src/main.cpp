@@ -19,9 +19,11 @@ HardwareTimer *stepYTimer = new HardwareTimer(TIM3);
 #define AZIMUTH_STEP_PER_DEGREE     55.5
 #define AZIMUTH_DEGREE_PER_PIXEL    0.031    // FOV / img_width
 
-/********************************** */
-float day_azimuth_degree_per_pixel = 0.0;
-float day_elevation_degree_per_pixel = 0.0;
+
+#define X_MAX_ACCELERATION  10000
+
+float azimuth_degree_per_pixel = 0.0;
+float elevation_degree_per_pixel = 0.0;
 
 float day_azimuth_FOV = 0.0;
 float day_elevation_FOV = 0.0;
@@ -60,15 +62,24 @@ AccelStepper stepper1(MOTOR_INTERFACE_TYPE, STEP1_PIN, DIR1_PIN);  //80000 means
 AccelStepper stepper2(MOTOR_INTERFACE_TYPE, STEP2_PIN, DIR2_PIN);
 
 //recieved positions values.
-signed long xValue = 0;                                  // Error distance in x-direction in pixels recieved from the high level
-signed long yValue = 0;                                  // Error distance in y-direction in pixels recieved from the high level
-signed long zValue = 0;                                  // Zoom level recieved from the high level
-int  cam =0;                                             // Camera used (0 = Day Cam in use , 1 = Thermal Cam in use)
 
-int  Xmax_speed =0 ;                                     // maximum speed limit per axis based on level of zoom recieved (speed decreases on zooming in & vice versa)
-int  Ymax_speed =0 ;
 
-bool parsePositionString(String str, long &x, long &y, long &z,int &camera);
+signed long xValue = 0;
+signed long yValue = 0;
+signed long zValue = 0;
+long X_stepFreq =0;
+long Y_stepFreq =0;
+
+bool x_direction =0;
+bool y_direction =0;
+
+long currPos1 = 0;
+long currPos2 = 0;
+int Xmax_speed =0 ;
+int Ymax_speed =0 ;
+
+bool parsePositionString(String str);
+
 
 void SerialRxTask(void *pvParameters)
 {
@@ -77,50 +88,26 @@ void SerialRxTask(void *pvParameters)
   {
     if (Serial1.available() > 0)
     {
-      /*
-      Recieve format is:
-      "X: x - Y: y - Z: z"
-      new format after adding thermal cam.:
-      "X: x - Y: y - Z: z - C: c"          (C = used camera 1 or 0)
-      */
-
       /* start recieving until find the end of string */
       String receivedString = Serial1.readStringUntil('\n');
       receivedString.trim();
-      
-     /* read out the numeric content from the recieved string  */
-      bool validData = parsePositionString(receivedString, xValue, yValue, zValue,cam);
-      
+     // xValue = (long)receivedString[0] ;
+      bool validData = parsePositionString(receivedString);
+     //  Serial1.print(x_direction);
+    //  Serial1.print(X_stepFreq);
+
+    //   Serial1.print(y_direction);
+     //   Serial1.println(Y_stepFreq);
       Serial1.read();
 
-      /* D A Y - C A M E R A */
-      if(cam == 0)
-      {
+      // azimuth_FOV = 61.9 - ((zValue/7.0f) * (6.0f/7.0f) * 60);
+      // azimuth_degree_per_pixel = azimuth_FOV / IMAGE_WIDTH;
 
-/* FUNCTIONS TO CALCULATE RE-SCLAE AND MAP RECIEVED ZOOM LEVEL TO UPDATE THE FIELD OF VIEW*/
+      // elevation_FOV = 37.2 - ((zValue/7.0f) * (36.1f/7.0f) * 36.1);
+      // elevation_degree_per_pixel = elevation_FOV / IMAGE_HEIGHT;
 
-      /* Day camera has FOV range from 61.9 to 1.9 degrees in horizontal */  
-        day_azimuth_FOV = 61.9 - ((zValue/7.0f) * (60.0f/7.0f) * 60);
-        day_azimuth_degree_per_pixel = day_azimuth_FOV / DAY_IMAGE_WIDTH;
-
-      /* Day camera has FOV range from 37.2 to 1.1 degrees in vertical */ 
-        day_elevation_FOV = 37.2 - ((zValue/7.0f) * (36.1f/70.0f) * 36.1);
-        day_elevation_degree_per_pixel = day_elevation_FOV / DAY_IMAGE_HEIGHT;
-      }
-      else
-      {
-      /* Thermal camera has FOV range from 14.6 to 2.4 degrees in horizontal */ 
-        thermal_azimuth_FOV = 14.6 - ((zValue/7.0f) * (12.2f/7.0f) * 12.2);
-        thermal_azimuth_degree_per_pixel = thermal_azimuth_FOV / DAY_IMAGE_WIDTH;
-
-        /* Thermal camera has FOV range from 11.7 to 2 degrees in vertical */ 
-        thermal_elevation_FOV = 11.7 - ((zValue/7.0f) * (9.7f/70.0f) * 9.7);
-        thermal_elevation_degree_per_pixel = thermal_elevation_FOV / DAY_IMAGE_HEIGHT;
-      }
-
-      /* Remap the maximum speed in both axes depending on the current zoom level */
-      Xmax_speed = map(zValue, 0, 7, 20000, 300);
-      Ymax_speed = map(zValue, 0, 7, 20000, 200);
+      // Xmax_speed = map(zValue, 0, 7, 20000, 1000);
+      // Ymax_speed = map(zValue, 0, 7, 20000, 500);
 
     }
     //vTaskDelay(pdMS_TO_TICKS(33));
@@ -133,9 +120,9 @@ void SerialTxTask(void *pvParameters)
   for (;;)
   {
     Serial1.print("X Position: ");
-    Serial1.print(xValue);
+   // Serial1.print(xValue);
     Serial1.print(" ; Y Position: ");
-    Serial1.println(yValue);
+  //  Serial1.println(yValue);
     vTaskDelay(pdMS_TO_TICKS(300));
   }
 }
@@ -143,31 +130,17 @@ void SerialTxTask(void *pvParameters)
 
 void StepperX_Task(void *pvParameters)
 {
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    // PID parameters
-    //const long double Kp =  0.2;
-    // const long double Kp =  1.6;
-    // const long double Ki = 0.08;
-    // const long double Kd = 0.04;
-
-    long double Kp =  0;     //0.75
-    long double Ki = 0.0;      //0.02
-    long double Kd = 0.0;       //0.1
-
-    long double pid_integral = 0;
-    long double pid_last_error = 0;
-    // const long double MAX_INTEGRAL = 100.0; // Tune this value          ////////////////////
-    
-    // PID control loop
-    long double error = 0; // xValue is the error from center
-    
-    // pid_integral = constrain(pid_integral, -MAX_INTEGRAL, MAX_INTEGRAL); /////////////////////
-    long double derivative = 0;
-    long double output =0;
+   
+    /* direction , step frequency , acceleration , maximum acceleration */
+    long double acceleration =0; 
     uint32_t stepFreq =0;
+    float max_delta_frequency = 0;
+    max_delta_frequency = X_MAX_ACCELERATION * DT;
+    int32_t delta_frequency = 0;
+    int32_t ramped_frequency =0;
+
   for (;;)
   {
-<<<<<<< HEAD
     //************************************* Pressed State *****************************************//
     while(digitalRead(BTN1_PIN) == LOW || digitalRead(BTN2_PIN) == LOW || digitalRead(BTN3_PIN) == LOW || digitalRead(BTN4_PIN) == LOW || digitalRead(BTN5_PIN) == LOW)
     {
@@ -177,95 +150,64 @@ void StepperX_Task(void *pvParameters)
       
     }
     // const long double MAX_INTEGRAL = 100.0; // Tune this value               ///////////////////
-    if(xValue < 10 && xValue > -10)
-    {
-      stepXTimer->pause();  // Stop if speed too low
-      digitalWrite(STEP1_PIN, LOW);
-    }
-    else
-    {
-      if(cam ==0)
-      {
-        Kp=1.6;
-        Ki=0.08;
-        Kd=0.04;
 
-    // Day PID control loop
-    error = xValue*day_azimuth_degree_per_pixel*AZIMUTH_STEP_PER_DEGREE; // xValue is the error from center
-    derivative = (error - pid_last_error)/DT; 
-    pid_integral += error*DT;
-    output =  Kp * error + Ki * pid_integral + Kd * derivative;
-    pid_last_error = error;
-    //output = constrain(output, -360, 360);
+
+
+
     // NEW: Control hardware timer instead of stepper library
     // Set direction based on sign
-      }
-      else
-      {
-        Kp=0;
-        Ki=0;
-        Kd=0;
-
-    // Thermal PID control loop
-    error = xValue*thermal_azimuth_degree_per_pixel*AZIMUTH_STEP_PER_DEGREE; // xValue is the error from center
-    derivative = (error - pid_last_error)/DT; 
-    pid_integral += error*DT;
-    output =  Kp * error + Ki * pid_integral + Kd * derivative;
-    pid_last_error = error;
-    //output = constrain(output, -360, 360);
-    // NEW: Control hardware timer instead of stepper library
-  
-      }
-        // Set direction based on sign
-    digitalWrite(DIR1_PIN, output > 0 ? HIGH : LOW);
-    
+    digitalWrite(DIR1_PIN, x_direction > 0 ? HIGH : LOW);
+     
     // Convert PID output to step frequency
-    stepFreq = fabs(output * AZIMUTH_STEP_PER_DEGREE);
-    stepFreq = constrain(stepFreq, 0, Xmax_speed);
-    stepFreq = (int32_t)stepFreq;
-    //Serial1.print("X=");
-    Serial1.println(stepFreq);
-    if (stepFreq > 50) {  // Minimum speed threshold
-      stepXTimer->setOverflow(stepFreq, HERTZ_FORMAT);
-      stepXTimer->resume();  // Start/continue stepping
-    } else if(stepFreq < 50  ) {
-      stepXTimer->pause();  // Stop if speed too low
-      digitalWrite(STEP1_PIN, LOW);
 
+    stepFreq = (int32_t)X_stepFreq;
+
+    delta_frequency = stepFreq-ramped_frequency;
+
+    if(delta_frequency > max_delta_frequency)
+    {
+      delta_frequency = max_delta_frequency;
+      ramped_frequency += delta_frequency;
+    }
+     else if(delta_frequency < -max_delta_frequency)
+    {
+      delta_frequency = -max_delta_frequency;
+      ramped_frequency += delta_frequency;
+    }
+    else if(delta_frequency < max_delta_frequency)
+    {
+      ramped_frequency += delta_frequency;
     }
     
-    //vTaskDelay(pdMS_TO_TICKS(10)); // Keep your 10ms PID rate
-    vTaskDelayUntil( &xLastWakeTime, pdMS_TO_TICKS( 10 ) );
+
+    Serial1.println(ramped_frequency);
+    if (ramped_frequency > 50) {  // Minimum speed threshold
+      stepXTimer->setOverflow(ramped_frequency, HERTZ_FORMAT);
+      stepXTimer->resume();  // Start/continue stepping
+    } else if(ramped_frequency < 50  ) {
+      stepXTimer->pause();  // Stop if speed too low
+      digitalWrite(STEP1_PIN, LOW);
+    }
+    
+    vTaskDelay(pdMS_TO_TICKS(10)); // Keep your 10ms PID rate
   }
   }
 
-}
+
 
 /************************************************************************/
 
 void StepperY_Task(void *pvParameters)
 {
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    // PID parameters
-    // const long double Kp = 1.6;     //0.75
-    // const long double Ki =0;           //0
-    // const long double Kd =0.1;         //0.1
-
-    long double Kp = 0;                //1;     //0.75
-    long double Ki =0;           //0.01
-    long double Kd =0;         //0.1
-
-    long double pid_integral = 0;
-    long double pid_last_error = 0;
-    // const long double MAX_INTEGRAL = 100.0; // Tune this value          ////////////////////
     
-    // PID control loop
-    long double error = 0; // xValue is the error from center
-    
-    // pid_integral = constrain(pid_integral, -MAX_INTEGRAL, MAX_INTEGRAL); /////////////////////
-    long double derivative = 0;
-    long double output =0;
-    uint32_t stepFreq = 0;
+    /* direction , step frequency , acceleration , maximum acceleration */
+    long double acceleration =0; 
+    uint32_t stepFreq =0;
+    float max_delta_frequency = 0;
+    max_delta_frequency = X_MAX_ACCELERATION * DT;
+    int32_t delta_frequency = 0;
+    int32_t ramped_frequency =0;
+
   for (;;)
   {
     //************************************* Pressed State *****************************************//
@@ -276,67 +218,45 @@ void StepperY_Task(void *pvParameters)
       digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
       
     }
-        if(yValue == 0)
-    {
-      stepYTimer->pause();  // Stop if speed too low
-      digitalWrite(STEP2_PIN, LOW);
-    }
-    else{
-
-      if(cam==0)
-      {
-        Kp=0.75;
-        Kd=0.1;
-        Ki=0.1;
-
-    error = yValue*day_elevation_degree_per_pixel*ELEVATTION_STEP_PER_DEGREE; // yValue is the error from center
-    derivative = (error - pid_last_error)/DT; 
-    pid_integral += error*DT;
-    output =  Kp * error + Ki * pid_integral + Kd * derivative;
-    pid_last_error = error;
-      }
-      else
-      {
-        Kp=0;
-        Kd=0;
-        Ki=0;
-
-    error = yValue*thermal_elevation_degree_per_pixel*ELEVATTION_STEP_PER_DEGREE; // yValue is the error from center
-    derivative = (error - pid_last_error)/DT; 
-    pid_integral += error*DT;
-    output =  Kp * error + Ki * pid_integral + Kd * derivative;
-    pid_last_error = error;
-      }
-   // output = constrain(output, -360, 360);
-
     // NEW: Control hardware timer instead of stepper library
     // Set direction based on sign
-    digitalWrite(DIR2_PIN, output > 0 ? HIGH : LOW);
+
+   
+    digitalWrite(DIR2_PIN, y_direction > 0 ? HIGH : LOW);
     
     // Convert PID output to step frequency
-    stepFreq = fabs(output*ELEVATTION_STEP_PER_DEGREE);
-    stepFreq = constrain(stepFreq, 0, Ymax_speed);
-    stepFreq = (int32_t) stepFreq;
-   // Serial1.println(stepFreq);
-    if (stepFreq > 50) {  // Minimum speed threshold
-      stepYTimer->setOverflow(stepFreq, HERTZ_FORMAT);
+
+    stepFreq = (int32_t)Y_stepFreq;
+
+    delta_frequency = stepFreq-ramped_frequency;
+
+    if(delta_frequency > max_delta_frequency)
+    {
+      delta_frequency = max_delta_frequency;
+      ramped_frequency += delta_frequency;
+
+    }
+    else if(delta_frequency < -max_delta_frequency)
+    {
+      delta_frequency = -max_delta_frequency;
+      ramped_frequency += delta_frequency;
+
+    }
+    else if(delta_frequency < max_delta_frequency)
+    {
+      ramped_frequency += delta_frequency;
+    }
+        //Serial1.print("X=");
+    if (ramped_frequency > 50) {  // Minimum speed threshold
+      stepYTimer->setOverflow(ramped_frequency, HERTZ_FORMAT);
       stepYTimer->resume();  // Start/continue stepping
-    } else {
+    } else if(ramped_frequency < 50  ) {
       stepYTimer->pause();  // Stop if speed too low
       digitalWrite(STEP2_PIN, LOW);
     }
-    
-    //vTaskDelay(pdMS_TO_TICKS(10)); // Keep your 10ms PID rate
-    vTaskDelayUntil( &xLastWakeTime, pdMS_TO_TICKS( 10 ) );
-=======
-    stepper1.runSpeed();
-    // taskYIELD();
-    stepper2.runSpeed();
-    taskYIELD();
-    // vTaskDelay();
->>>>>>> origin/U3
+    vTaskDelay(pdMS_TO_TICKS(10)); // Keep your 10ms PID rate
   }
-}
+
 }
 
 
@@ -356,18 +276,14 @@ void ButtonsTask(void *pvParameters)
     {
       if(wasReleased1)
       {
-        // stepper1.stop();
-        // stepper1.setCurrentPosition(0);
-      stepXTimer->pause();  // Stop if speed too low
-      digitalWrite(STEP1_PIN, LOW);
+        stepper1.stop();
+        stepper1.setCurrentPosition(0);
         wasReleased1 = false;
       }
       if(wasReleased2)
       {
-        // stepper2.stop();
-        // stepper2.setCurrentPosition(0);
-      stepYTimer->pause();  // Stop if speed too low
-      digitalWrite(STEP2_PIN, LOW);
+        stepper2.stop();
+        stepper2.setCurrentPosition(0);
         wasReleased2 = false;
       }
       vTaskDelay(pdMS_TO_TICKS(10));
@@ -386,11 +302,8 @@ void ButtonsTask(void *pvParameters)
           wasRight = true;
         }
         wasReleased1 = true;
-        // stepper1.moveTo(1000000); // Move continuously
-        // stepper1.run(); 
-         digitalWrite(DIR1_PIN,1);
-      stepXTimer->setOverflow(15000, HERTZ_FORMAT);
-      stepXTimer->resume();  // Start/continue stepping
+        stepper1.moveTo(1000000); // Move continuously
+        stepper1.run(); 
       }
       // currentPos1 = stepper1.currentPosition();
     }
@@ -404,18 +317,15 @@ void ButtonsTask(void *pvParameters)
           wasRight = false;
         }
         wasReleased1 = true;
-      digitalWrite(DIR1_PIN,0);
-      stepXTimer->setOverflow(15000, HERTZ_FORMAT);
-      stepXTimer->resume();
+        stepper1.moveTo(-1000000); // Move continuously
+        stepper1.run();
       }
       // currentPos1 = stepper1.currentPosition();
     }
     else
     {
-      // stepper1.stop();
-      // stepper1.setCurrentPosition(0);
-      stepXTimer->pause();  // Stop if speed too low
-      digitalWrite(STEP1_PIN, LOW);
+      stepper1.stop();
+      stepper1.setCurrentPosition(0);
       xValue = 0;
     }
   
@@ -428,11 +338,8 @@ void ButtonsTask(void *pvParameters)
       while (digitalRead(IR2_PIN) == LOW && digitalRead(BTN1_PIN) == LOW)
       {
         wasReleased2 = true;
-        // stepper2.moveTo(-1000000); // Move continuously
-        // stepper2.run();
-      digitalWrite(DIR2_PIN,0);
-      stepYTimer->setOverflow(15000, HERTZ_FORMAT);
-      stepYTimer->resume();
+        stepper2.moveTo(-1000000); // Move continuously
+        stepper2.run();
       }
     }
     else if (digitalRead(BTN2_PIN) == LOW)
@@ -441,24 +348,20 @@ void ButtonsTask(void *pvParameters)
       while (digitalRead(IR1_PIN) == LOW && digitalRead(BTN2_PIN) == LOW)
       {
         wasReleased2 = true;
-        // stepper2.moveTo(1000000); // Move continuously
-        // stepper2.run();
-      digitalWrite(DIR2_PIN,1);
-      stepYTimer->setOverflow(15000, HERTZ_FORMAT);
-      stepYTimer->resume();
+        stepper2.moveTo(1000000); // Move continuously
+        stepper2.run();
       }
     }
     else
     {
-      // stepper2.stop();
-      // stepper2.setCurrentPosition(0);
-      stepYTimer->pause();  // Stop if speed too low
-      digitalWrite(STEP2_PIN, LOW);
+      stepper2.stop();
+      stepper2.setCurrentPosition(0);
       yValue = 0;
     }
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
+
 
 // Timer ISR - keep it SHORT and FAST
 void stepXTimerISR() {
@@ -550,32 +453,39 @@ void loop()
 //********************* Function to parse position string ********************//
 //*****************************************************************************//
 
-bool parsePositionString(String str, long &x, long &y, long &z, int &camera)
+
+bool parsePositionString(String str)
 {
-  // Find markers for X, Y, and Z
-  int xIndex = str.indexOf("X:");
-  int yIndex = str.indexOf("Y:");
-  int zIndex = str.indexOf("Z:");
-  int cam    = str.indexOf("C:");
-  // Validate all markers exist
-  if (xIndex == -1 || yIndex == -1 || zIndex == -1) {
-    return false;
-  }
+    // Remove spaces and newlines
+    str.trim();
 
-  // Extract substrings between markers
-  String xString = str.substring(xIndex + 2, yIndex);  // from after "X:" to before "Y:"
-  String yString = str.substring(yIndex + 2, zIndex);  // from after "Y:" to before "Z:"
-  String zString = str.substring(zIndex + 2, cam);     // from after "Z:" to before "C:"
-  String camString     = str.substring(zIndex + 2);              // from after "C:" to end
-  // Clean spaces
-  xString.trim();
-  yString.trim();
-  zString.trim();
+    // Split by commas
+    int firstComma  = str.indexOf(',');
+    int secondComma = str.indexOf(',', firstComma + 1);
+    int thirdComma  = str.indexOf(',', secondComma + 1);
 
-  // Convert to integers
-  x = xString.toInt();
-  y = yString.toInt();
-  z = zString.toInt();
-  camera = camString.toInt();
-  return true;
+    // Must have exactly 3 commas
+    if (firstComma == -1 || secondComma == -1 || thirdComma == -1) {
+        return false;
+    }
+
+    // Extract each field
+    String sx_dir = str.substring(0, firstComma);
+    String sXfreq = str.substring(firstComma + 1, secondComma);
+    String sy_dir = str.substring(secondComma + 1, thirdComma);
+    String sYfreq = str.substring(thirdComma + 1);
+
+    // Trim each one
+    sx_dir.trim();
+    sXfreq.trim();
+    sy_dir.trim();
+    sYfreq.trim();
+
+    // Convert
+    x_direction = (bool)(sx_dir.toInt());
+    X_stepFreq  = sXfreq.toInt();
+    y_direction = (bool)(sy_dir.toInt());
+    Y_stepFreq  = sYfreq.toInt();
+
+    return true;
 }
